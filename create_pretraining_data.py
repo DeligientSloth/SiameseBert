@@ -188,11 +188,19 @@ def create_training_instances(input_files, tokenizer, max_seq_length,
   # sentence boundaries for the "next sentence prediction" task).
   # (2) Blank lines between documents. Document boundaries are needed so
   # that the "next sentence prediction" task doesn't span between documents.
-  for input_file in input_files:
+  '''
+  # 输入文件格式： 
+	# (1) 每行一个句子。这应该是实际的句子，不应该是整个段落或者段落的随机片段(span)，因为我们需
+	# 要使用句子边界来做下一个句子的预测。 
+	# (2) 文档之间有一个空行。我们会认为同一个文档的相邻句子是有关系的。
+  '''
+  # 下面的代码读取所有文件，然后根据空行切分Document
+  # all_documents是list的list，第一层list表示document，第二层list表示document里的多个句子。
+  for input_file in input_files:  # 分割为很多的file进行处理
     with tf.gfile.GFile(input_file, "r") as reader:
       while True:
         line = tokenization.convert_to_unicode(reader.readline())
-        if not line:
+        if not line:  # 已经结束了，空行是在strip之后为空，因为末尾还有换行符号
           break
         line = line.strip()
 
@@ -224,7 +232,7 @@ def create_instances_from_document(
     all_documents, document_index, max_seq_length, short_seq_prob,
     masked_lm_prob, max_predictions_per_seq, vocab_words, rng):
   """Creates `TrainingInstance`s for a single document."""
-  document = all_documents[document_index]
+  document = all_documents[document_index]  # 抽取出当前的document
 
   # Account for [CLS], [SEP], [SEP]
   max_num_tokens = max_seq_length - 3
@@ -236,7 +244,9 @@ def create_instances_from_document(
   # sequences to minimize the mismatch between pre-training and fine-tuning.
   # The `target_seq_length` is just a rough target however, whereas
   # `max_seq_length` is a hard limit.
+
   target_seq_length = max_num_tokens
+  #  按照概率生成一定数量的短句子
   if rng.random() < short_seq_prob:
     target_seq_length = rng.randint(2, max_num_tokens)
 
@@ -249,10 +259,13 @@ def create_instances_from_document(
   current_chunk = []
   current_length = 0
   i = 0
+  #  遍历当前文档的句子，按照target长度进行切分。
   while i < len(document):
-    segment = document[i]
-    current_chunk.append(segment)
-    current_length += len(segment)
+    segment = document[i]  #  当前句子
+    current_chunk.append(segment)  # 是一个list，list里面是句子的list
+    current_length += len(segment)  # 统计token的总长度
+
+    #  tokens总数超过target的时候就开始分句，分为text_a和text_b，这样得到当前的chunk
     if i == len(document) - 1 or current_length >= target_seq_length:
       if current_chunk:
         # `a_end` is how many segments from `current_chunk` go into the `A`
@@ -276,12 +289,15 @@ def create_instances_from_document(
           # corpora. However, just to be careful, we try to make sure that
           # the random document is not the same as the document
           # we're processing.
+
+          #  随机选取一个document
           for _ in range(10):
             random_document_index = rng.randint(0, len(all_documents) - 1)
             if random_document_index != document_index:
               break
-
           random_document = all_documents[random_document_index]
+
+          #  从document中选择句子，实现是先取一个start
           random_start = rng.randint(0, len(random_document) - 1)
           for j in range(random_start, len(random_document)):
             tokens_b.extend(random_document[j])
@@ -289,6 +305,7 @@ def create_instances_from_document(
               break
           # We didn't actually use these segments so we "put them back" so
           # they don't go to waste.
+          #  i回退，因为token b的句子还没有用
           num_unused_segments = len(current_chunk) - a_end
           i -= num_unused_segments
         # Actual next
@@ -296,6 +313,7 @@ def create_instances_from_document(
           is_random_next = False
           for j in range(a_end, len(current_chunk)):
             tokens_b.extend(current_chunk[j])
+        #  进行截断
         truncate_seq_pair(tokens_a, tokens_b, max_num_tokens, rng)
 
         assert len(tokens_a) >= 1
@@ -356,11 +374,14 @@ def create_masked_lm_predictions(tokens, masked_lm_prob,
     # Note that Whole Word Masking does *not* change the training code
     # at all -- we still predict each WordPiece independently, softmaxed
     # over the entire vocabulary.
+    '''
+    这里的cand_indexes，如果是WWM的话是word的集合
+    '''
     if (FLAGS.do_whole_word_mask and len(cand_indexes) >= 1 and
         token.startswith("##")):
-      cand_indexes[-1].append(i)
+      cand_indexes[-1].append(i)  #词的中间部分，加到词里面去
     else:
-      cand_indexes.append([i])
+      cand_indexes.append([i])  #是词或者词的开头
 
   rng.shuffle(cand_indexes)
 
@@ -376,6 +397,7 @@ def create_masked_lm_predictions(tokens, masked_lm_prob,
       break
     # If adding a whole-word mask would exceed the maximum number of
     # predictions, then just skip this candidate.
+    #  前面只是在做一些检查
     if len(masked_lms) + len(index_set) > num_to_predict:
       continue
     is_any_index_covered = False
@@ -385,6 +407,8 @@ def create_masked_lm_predictions(tokens, masked_lm_prob,
         break
     if is_any_index_covered:
       continue
+
+    #  对于word里面的每个index
     for index in index_set:
       covered_indexes.add(index)
 
@@ -399,11 +423,12 @@ def create_masked_lm_predictions(tokens, masked_lm_prob,
         # 10% of the time, replace with random word
         else:
           masked_token = vocab_words[rng.randint(0, len(vocab_words) - 1)]
-
+      #  mask掉
       output_tokens[index] = masked_token
 
       masked_lms.append(MaskedLmInstance(index=index, label=tokens[index]))
   assert len(masked_lms) <= num_to_predict
+  # 按照下标排序，保证是句子中出现的顺序。
   masked_lms = sorted(masked_lms, key=lambda x: x.index)
 
   masked_lm_positions = []

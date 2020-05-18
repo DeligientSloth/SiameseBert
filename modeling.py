@@ -659,10 +659,11 @@ def attention_layer(from_tensor,
   #   N = `num_attention_heads`
   #   H = `size_per_head`
 
-  from_tensor_2d = reshape_to_matrix(from_tensor)
+  from_tensor_2d = reshape_to_matrix(from_tensor)  # 转化为bs*seq_length, dim的2D matrix
   to_tensor_2d = reshape_to_matrix(to_tensor)
 
   # `query_layer` = [B*F, N*H]
+  #  维度变换，其实不影响
   query_layer = tf.layers.dense(
       from_tensor_2d,
       num_attention_heads * size_per_head,
@@ -687,6 +688,7 @@ def attention_layer(from_tensor,
       kernel_initializer=create_initializer(initializer_range))
 
   # `query_layer` = [B, N, F, H]
+  # [batch,head_num,长度,hidden_size]前面两个维度可以并行计算，这也是多头并行的原理
   query_layer = transpose_for_scores(query_layer, batch_size,
                                      num_attention_heads, from_seq_length,
                                      size_per_head)
@@ -698,6 +700,7 @@ def attention_layer(from_tensor,
   # Take the dot product between "query" and "key" to get the raw
   # attention scores.
   # `attention_scores` = [B, N, F, T]
+  #  多个样本以及head并行计算attention score
   attention_scores = tf.matmul(query_layer, key_layer, transpose_b=True)
   attention_scores = tf.multiply(attention_scores,
                                  1.0 / math.sqrt(float(size_per_head)))
@@ -737,6 +740,7 @@ def attention_layer(from_tensor,
   # `context_layer` = [B, F, N, H]
   context_layer = tf.transpose(context_layer, [0, 2, 1, 3])
 
+  #  num head * size per head表示把多个头的结果拼接在一起
   if do_return_2d_tensor:
     # `context_layer` = [B*F, N*H]
     context_layer = tf.reshape(
@@ -826,8 +830,17 @@ def transformer_model(input_tensor,
   for layer_idx in range(num_hidden_layers):
     with tf.variable_scope("layer_%d" % layer_idx):
       layer_input = prev_output
-
+      '''
+      下面分为两个variable scope，attention 和 FNN
+      
+      FNN也分为两个variable scope，一个中间层，加了activation，一个不加
+      '''
       with tf.variable_scope("attention"):
+        '''
+        attention scope
+        下面分为两个variable_scope，一个是self，一个是output
+        self是进行self-attention，output是乘以WO矩阵（dense）之后进行dropout， add&layer norm
+        '''
         attention_heads = []
         with tf.variable_scope("self"):
           attention_head = attention_layer(
@@ -842,7 +855,7 @@ def transformer_model(input_tensor,
               batch_size=batch_size,
               from_seq_length=seq_length,
               to_seq_length=seq_length)
-          attention_heads.append(attention_head)
+          attention_heads.append(attention_head)  # context_layer = [B*F, N*H]
 
         attention_output = None
         if len(attention_heads) == 1:
@@ -854,11 +867,14 @@ def transformer_model(input_tensor,
 
         # Run a linear projection of `hidden_size` then add a residual
         # with `layer_input`.
+        #  对应WO 多个其实还是hidden size，只是再做一下维度变换
         with tf.variable_scope("output"):
           attention_output = tf.layers.dense(
               attention_output,
               hidden_size,
               kernel_initializer=create_initializer(initializer_range))
+          #  乘以WO 之后 multi-head attention结束，需要进行 dropout add&layer norm
+          #  这里都算到output里面去而已
           attention_output = dropout(attention_output, hidden_dropout_prob)
           attention_output = layer_norm(attention_output + layer_input)
 

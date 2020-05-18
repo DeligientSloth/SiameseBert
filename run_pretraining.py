@@ -240,7 +240,14 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
 def get_masked_lm_output(bert_config, input_tensor, output_weights, positions,
                          label_ids, label_weights):
   """Get loss and log probs for the masked LM."""
-  input_tensor = gather_indexes(input_tensor, positions)
+  '''
+  (masked_lm_loss,
+     masked_lm_example_loss, masked_lm_log_probs) = get_masked_lm_output(
+         bert_config, model.get_sequence_output(), model.get_embedding_table(),
+         masked_lm_positions, masked_lm_ids, masked_lm_weights)
+  '''
+  input_tensor = gather_indexes(input_tensor, positions)  # bert mask掉的位置
+  #  输出是bs*L, hidden size
 
   with tf.variable_scope("cls/predictions"):
     # We apply one more non-linear transformation before the output layer.
@@ -252,7 +259,7 @@ def get_masked_lm_output(bert_config, input_tensor, output_weights, positions,
           activation=modeling.get_activation(bert_config.hidden_act),
           kernel_initializer=modeling.create_initializer(
               bert_config.initializer_range))
-      input_tensor = modeling.layer_norm(input_tensor)
+      input_tensor = modeling.layer_norm(input_tensor)  #  mask一个序列，所以需要layer norm
 
     # The output weights are the same as the input embeddings, but there is
     # an output-only bias for each token.
@@ -260,11 +267,11 @@ def get_masked_lm_output(bert_config, input_tensor, output_weights, positions,
         "output_bias",
         shape=[bert_config.vocab_size],
         initializer=tf.zeros_initializer())
-    logits = tf.matmul(input_tensor, output_weights, transpose_b=True)
+    logits = tf.matmul(input_tensor, output_weights, transpose_b=True)  #   word embedding相当于label embedding
     logits = tf.nn.bias_add(logits, output_bias)
     log_probs = tf.nn.log_softmax(logits, axis=-1)
 
-    label_ids = tf.reshape(label_ids, [-1])
+    label_ids = tf.reshape(label_ids, [-1])  #  mask掉的词的真实id
     label_weights = tf.reshape(label_weights, [-1])
 
     one_hot_labels = tf.one_hot(
@@ -274,8 +281,9 @@ def get_masked_lm_output(bert_config, input_tensor, output_weights, positions,
     # short to have the maximum number of predictions). The `label_weights`
     # tensor has a value of 1.0 for every real prediction and 0.0 for the
     # padding predictions.
-    per_example_loss = -tf.reduce_sum(log_probs * one_hot_labels, axis=[-1])
-    numerator = tf.reduce_sum(label_weights * per_example_loss)
+    #  weight主要是考虑了有些mask位置是为了补足而pad的
+    per_example_loss = -tf.reduce_sum(log_probs * one_hot_labels, axis=[-1])  # shape = bs, L
+    numerator = tf.reduce_sum(label_weights * per_example_loss)  # shape = bs
     denominator = tf.reduce_sum(label_weights) + 1e-5
     loss = numerator / denominator
 

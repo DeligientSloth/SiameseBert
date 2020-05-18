@@ -1,0 +1,4 @@
+export BERT_BASE_DIR=/data/ceph/supvectorli/bert_demo/chinese_L-12_H-768_A-12
+export Quest_DIR=/data/ceph/supvectorli/demo-dataSet
+python3 run_classifier_quest.py --task_name=quest --do_train=true -do_eval=true --data_dir=$Quest_DIR/quest-integr-1.6w --vocab_file=$BERT_BASE_DIR/vocab.txt --bert_config_file=$BERT_BASE_DIR/bert_config.json --init_checkpoint=$BERT_BASE_DIR/bert_model.ckpt --max_seq_length=20 --train_batch_size=32 --learning_rate=2e-5 --num_train_epochs=1 --output_dir=../output_dir
+python3 run_classifier_quest.py --task_name=quest --max_seq_length=20 --train_batch_size=32 --learning_rate=2e-5 --num_train_epochs=1

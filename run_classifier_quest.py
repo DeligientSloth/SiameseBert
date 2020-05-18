@@ -12,30 +12,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-'''
-过程
-1、自定义data processor，重写get_train_examples(dev, test)方法，读入文件，转化为InputExample对象
-   InputExample可以自己定义，一般就是id, text_a, test_b和label；
-   为了兼容py2和py3，每一行都需要调用convert_to_unicode，因为str在py3是Unicode，在py2是byte array
-2、通过file_based_convert_examples_to_features，将InputExample转化为InputFeature，并且写入TFRecordWriter的文件中；
-    convert_single_example，将每个example转化为inputFeature，通过tokenizer对text_a,b分词，并且truncate
-    如果text_b不存在，那么text_a截断为原来的max_len-2
-    如果text_b存在，pop长句，一直到两个句子长度和小于max_len-3
 
-    tokenizer = FullTokenizer
-        BasicTokenizer:据空格等进行普通的分词
-        WordpieceTokenizer: 前者是根，而后者会把前者的结果再细粒度的切分为WordPiece
-        对于中文来说，WordpieceTokenizer什么也不干
-        wordpiece通过词频构造词典，做贪心的最大正向匹配，word piece是将英语切为字符，然后合并出现频次高的字符
-        注意：接在前面的词用##+word
-3、Estimator API：model_fn和input_fn
-    input_fn：从文件得到TFRecordDataset，然后根据是否训练来shuffle和重复读取。
-    apply函数对每一个TFRecord进行map_and_batch，
-         _decode_record函数对record进行parsing。从而把TFRecord的一条Record变成tf.Example对象
-    model_fn_builder: bert model，然后返回loss等，建立优化器，必须返回 tf.estimator.EstimatorSpec
-'''
 """BERT finetuning runner."""
-
 from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
@@ -52,30 +30,33 @@ flags = tf.flags
 
 FLAGS = flags.FLAGS
 
+BERT_BASE_DIR = '../chinese_L-12_H-768_A-12'
+DATA_DIR = '../../demo-dataSet/quest-integr-1.6w'
+
 ## Required parameters
 flags.DEFINE_string(
-    "data_dir", None,
+    "data_dir", DATA_DIR,
     "The input data dir. Should contain the .tsv files (or other data files) "
     "for the task.")
 
 flags.DEFINE_string(
-    "bert_config_file", None,
+    "bert_config_file", os.path.join(BERT_BASE_DIR, 'bert_config.json'),
     "The config json file corresponding to the pre-trained BERT model. "
     "This specifies the model architecture.")
 
 flags.DEFINE_string("task_name", None, "The name of the task to train.")
 
-flags.DEFINE_string("vocab_file", None,
+flags.DEFINE_string("vocab_file", os.path.join(BERT_BASE_DIR, 'vocab.txt'),
                     "The vocabulary file that the BERT model was trained on.")
 
 flags.DEFINE_string(
-    "output_dir", None,
+    "output_dir", '../output_dir',
     "The output directory where the model checkpoints will be written.")
 
 ## Other parameters
 
 flags.DEFINE_string(
-    "init_checkpoint", None,
+    "init_checkpoint", os.path.join(BERT_BASE_DIR, 'bert_model.ckpt'),
     "Initial checkpoint (usually from a pre-trained BERT model).")
 
 flags.DEFINE_bool(
@@ -84,17 +65,17 @@ flags.DEFINE_bool(
     "models and False for cased models.")
 
 flags.DEFINE_integer(
-    "max_seq_length", 128,
+    "max_seq_length", 32,
     "The maximum total input sequence length after WordPiece tokenization. "
     "Sequences longer than this will be truncated, and sequences shorter "
     "than this will be padded.")
 
-flags.DEFINE_bool("do_train", False, "Whether to run training.")
+flags.DEFINE_bool("do_train", True, "Whether to run training.")
 
-flags.DEFINE_bool("do_eval", False, "Whether to run eval on the dev set.")
+flags.DEFINE_bool("do_eval", True, "Whether to run eval on the dev set.")
 
 flags.DEFINE_bool(
-    "do_predict", False,
+    "do_predict", True,
     "Whether to run the model in inference mode on the test set.")
 
 flags.DEFINE_integer("train_batch_size", 32, "Total batch size for training.")
@@ -395,6 +376,46 @@ class ColaProcessor(DataProcessor):
           InputExample(guid=guid, text_a=text_a, text_b=None, label=label))
     return examples
 
+
+class QuestProcessor(DataProcessor):
+  """
+  自己的读取程序，读取quest下面的两个文件
+  文件格式是句子+label（是否完整）
+  """
+  def get_train_examples(self, data_dir):
+    """See base class."""
+    return self._create_examples(
+        self._read_tsv(os.path.join(data_dir, "train.tsv")), "train")
+
+  def get_dev_examples(self, data_dir):
+    """See base class."""
+    return self._create_examples(
+        self._read_tsv(os.path.join(data_dir, "test.tsv")), "dev")
+
+  def get_test_examples(self, data_dir):
+    """See base class."""
+    return self._create_examples(
+        self._read_tsv(os.path.join(data_dir, "test.tsv")), "test")
+
+  def get_labels(self):
+    """See base class."""
+    return ["0", "1"]
+
+  def _create_examples(self, lines, set_type):
+    """Creates examples for the training and dev sets."""
+    examples = []
+    for (i, line) in enumerate(lines):
+      if i == 0:
+        continue
+      guid = "%s-%s" % (set_type, i)
+      text_a = tokenization.convert_to_unicode(line[0])
+      if set_type == "test":
+        label = "0"  #  跟feature对应，都需要string
+      else:
+        label = tokenization.convert_to_unicode(line[1])
+      examples.append(
+          InputExample(guid=guid, text_a=text_a, label=label))
+    return examples
 
 def convert_single_example(ex_index, example, label_list, max_seq_length,
                            tokenizer):
@@ -810,6 +831,7 @@ def main(_):
       "mnli": MnliProcessor,
       "mrpc": MrpcProcessor,
       "xnli": XnliProcessor,
+      "quest": QuestProcessor  # 自己的task
   }
 
   tokenization.validate_case_matches_checkpoint(FLAGS.do_lower_case,
@@ -995,9 +1017,5 @@ def main(_):
 
 
 if __name__ == "__main__":
-  flags.mark_flag_as_required("data_dir")
   flags.mark_flag_as_required("task_name")
-  flags.mark_flag_as_required("vocab_file")
-  flags.mark_flag_as_required("bert_config_file")
-  flags.mark_flag_as_required("output_dir")
   tf.app.run()
