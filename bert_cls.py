@@ -960,7 +960,7 @@ def main(_):
     #  train part
     best_val_loss = 10000.0
     no_best_num = 0
-    for i in range(1, FLAGS.num_train_epochs+1):
+    for i in range(1, int(FLAGS.num_train_epochs+1)):
         train_steps = int(len(train_examples) / FLAGS.train_batch_size) * i
 
         tf.logging.info("Run train %d epoch..." % i)
