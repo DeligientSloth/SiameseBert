@@ -1,6 +1,6 @@
 export BERT_BASE_DIR=../bert/chinese_L-12_H-768_A-12
 export DATA_BASE_DIR=data/20191029
-python run_classifier.py \
+python bert_cls.py \
   --data_dir=$DATA_BASE_DIR \
   --task_name=simiq \
   --vocab_file=$BERT_BASE_DIR/vocab.txt \
