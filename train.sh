@@ -8,8 +8,8 @@ python bert_cls.py \
   --init_checkpoint=$BERT_BASE_DIR/bert_model.ckpt \
   --train_batch_size=32 \
   --max_seq_length=50 \
-  --learning_rate=2e-5 \
-  --num_train_epochs=3.0 \
+  --learning_rate=1e-5 \
+  --num_train_epochs=2.0 \
   --output_dir=./output_dir \
   --user_tpu=False \
   --do_train=true \
