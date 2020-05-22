@@ -264,7 +264,7 @@ class BertModel(object):
                 self.pooled_output1 = tf.layers.dense(
                     first_token_tensor1,
                     config.hidden_size, activation=tf.tanh,
-                    name='pool_out', reuse=True,
+                    name='pool_out',
                     kernel_initializer=create_initializer(config.initializer_range))
             with tf.variable_scope("pooler", reuse=True):
                 # We "pool" the model by simply taking the hidden state corresponding
