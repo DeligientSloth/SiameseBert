@@ -642,16 +642,16 @@ def create_model(bert_config, is_training,
         token_type_ids2=segment_ids2,
         use_one_hot_embeddings=use_one_hot_embeddings)
 
-    #  cls位置的输出，已经变换为128维度
-    cls_output1 = model.get_mean_pooled_output1()
-    cls_output2 = model.get_mean_pooled_output1()
+    #  策略1是采用meanpooling的输出
+    #  策略2是采用CLS的输出
+    output1 = model.get_mean_pooled_output1()
+    output2 = model.get_mean_pooled_output2()
 
     #  v1, v2 |v1-v2|, v1*v2
-    cls_output = tf.concat([cls_output1, cls_output2,
-                            tf.abs(tf.subtract(cls_output1, cls_output2))], axis=-1)
+    output = tf.concat([output1, output2, tf.abs(tf.subtract(output1, output2))], axis=-1)
 
     with tf.variable_scope("bert_output_binary_cls"):
-        intermediate_layer = tf.layers.dense(cls_output, 256, activation=tf.nn.relu)
+        intermediate_layer = tf.layers.dense(output, 256, activation=tf.nn.relu)
         if is_training:
             intermediate_layer = tf.nn.dropout(intermediate_layer, keep_prob=0.9)
         logits = tf.layers.dense(intermediate_layer, 1)
