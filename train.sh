@@ -1,5 +1,5 @@
 export BERT_BASE_DIR=../bert/chinese_L-12_H-768_A-12
-export DATA_BASE_DIR=../data/20191029
+export DATA_BASE_DIR=../data/20191029_debug
 python bert_siamese.py \
   --data_dir=$DATA_BASE_DIR \
   --task_name=simiq \

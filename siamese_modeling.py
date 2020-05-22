@@ -149,7 +149,7 @@ class BertModel(object):
         if token_type_ids2 is None:
             token_type_ids2 = tf.zeros(shape=[batch_size, seq_length], dtype=tf.int32)
 
-        with tf.variable_scope(scope, default_name="bert", reuse=tf.AUTO_REUSE):
+        with tf.variable_scope(scope, default_name="bert"):
             #  embedding of sentence1, variable scope embeddings
             with tf.variable_scope("embeddings"):
                 # Perform embedding lookup on the word ids.
