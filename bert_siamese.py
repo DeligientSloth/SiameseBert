@@ -647,7 +647,8 @@ def create_model(bert_config, is_training,
     cls_output2 = model.get_mean_pooled_output1()
 
     #  v1, v2 |v1-v2|, v1*v2
-    cls_output = tf.concat([cls_output1, cls_output2, tf.abs(tf.subtract(cls_output1, cls_output2))])
+    cls_output = tf.concat([cls_output1, cls_output2,
+                            tf.abs(tf.subtract(cls_output1, cls_output2))], axis=-1)
 
     with tf.variable_scope("bert_output_binary_cls"):
         intermediate_layer = tf.layers.dense(cls_output, 256, activation=tf.nn.relu)
