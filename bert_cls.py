@@ -962,8 +962,9 @@ def main(_):
         result = estimator.evaluate(input_fn=eval_input_fn)
 
         output_eval_file = os.path.join(FLAGS.output_dir, "eval_results.txt")
-        with tf.gfile.GFile(output_eval_file, "w") as writer:
+        with tf.gfile.GFile(output_eval_file, "a") as writer:
             tf.logging.info("***** Eval results %d round...*****" % i)
+            writer.write("***** Eval results %d round...*****\n" % i)
             for key in sorted(result.keys()):
                 tf.logging.info("  %s = %s", key, str(result[key]))
                 writer.write("%s = %s\n" % (key, str(result[key])))
