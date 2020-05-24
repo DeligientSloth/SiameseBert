@@ -648,13 +648,13 @@ def create_model(bert_config, is_training,
     output2 = model.get_mean_pooled_output2()
 
     #  v1, v2 |v1-v2|, v1*v2
-    output = tf.concat([output1, output2, tf.abs(tf.subtract(output1, output2))], axis=-1)
+    output = tf.concat([tf.multiply(output1, output2), tf.abs(tf.subtract(output1, output2))], axis=-1)
 
     with tf.variable_scope("bert_output_binary_cls"):
-        intermediate_layer = tf.layers.dense(output, 256, activation=tf.nn.relu)
+        intermediate_output = tf.layers.dense(output, 256, activation=tf.nn.relu)
         if is_training:
-            intermediate_layer = tf.nn.dropout(intermediate_layer, keep_prob=0.9)
-        logits = tf.layers.dense(intermediate_layer, 1)
+            intermediate_output = tf.nn.dropout(intermediate_output, keep_prob=0.9)
+        logits = tf.layers.dense(intermediate_output, 1)
         logits = tf.reshape(logits, [-1])
         predict = tf.nn.sigmoid(logits)
 
@@ -681,9 +681,11 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
         input_ids1 = features["input_ids1"]
         input_mask1 = features["input_mask1"]
         segment_ids1 = features["segment_ids1"]
+
         input_ids2 = features["input_ids2"]
         input_mask2 = features["input_mask2"]
         segment_ids2 = features["segment_ids2"]
+
         label_ids = features["label_ids"]
         is_real_example = None
         if "is_real_example" in features:
@@ -817,16 +819,16 @@ def input_fn_builder(features, seq_length, is_training, drop_remainder):
                     dtype=tf.int32),
             "input_ids2":
                 tf.constant(
-                    all_input_ids1, shape=[num_examples, seq_length],
+                    all_input_ids2, shape=[num_examples, seq_length],
                     dtype=tf.int32),
             "input_mask2":
                 tf.constant(
-                    all_input_mask1,
+                    all_input_mask2,
                     shape=[num_examples, seq_length],
                     dtype=tf.int32),
             "segment_ids2":
                 tf.constant(
-                    all_segment_ids1,
+                    all_segment_ids2,
                     shape=[num_examples, seq_length],
                     dtype=tf.int32),
             "label_ids":
