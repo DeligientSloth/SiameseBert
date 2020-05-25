@@ -112,6 +112,30 @@ def mean_pooling(inp, inp_mask):
             tf.cast(tf.reduce_sum(m, axis=1, keepdims=True), dtype=tf.float32) + tf.constant(1e-10)) # tf.Variable(1e-10, tf.float32)
     return masked_reduce_mean(inp, inp_mask)
 
+def interaction(v1, v2, mask1, mask2):
+
+    atten_scores12 = tf.matmul(v1, v2, transpose_b=True)  # 行代表input1，列代表input2
+    atten_scores21 = tf.transpose(atten_scores12, perm=[0, 2, 1])  # v2 to v1
+
+    fill_mask1 = (1.0 - tf.cast(mask1, tf.float32)) * float('-inf')  # v1 mask的位置是-inf，否则是0
+    fill_mask2 = (1.0 - tf.cast(mask2, tf.float32)) * float('-inf')  # v2 mask的位置是-inf，否则是0
+
+    atten_scores12 += tf.expand_dims(fill_mask2, axis=1)  # (bs, 1, v2 len)->(bs, v1 len, v2 len)
+    atten_scores21 += tf.expand_dims(fill_mask1, axis=1)  # (bs, 1, v1 len)->(bs, v2 len, v1 len)
+
+    atten_probs12 = tf.nn.softmax(atten_scores12)
+    atten_probs21 = tf.nn.softmax(atten_scores21)
+
+    v1_align = tf.matmul(atten_probs12, v2)
+    v2_align = tf.matmul(atten_probs21, v1)
+
+    return v1_align, v2_align
+
+def submul(x1, x2):
+    mul = x1 * x2
+    sub = x1 - x2
+    return tf.concat([mul, sub], axis=-1)
+
 class BertModel(object):
     """
     Siamese Bert
@@ -250,31 +274,41 @@ class BertModel(object):
             self.sequence_output1 = self.all_encoder_layers1[-1]
             self.sequence_output2 = self.all_encoder_layers2[-1]
 
-            #  取cls位置的输出
+            #  1. CLS
             self.pooled_output1 = tf.squeeze(self.sequence_output1[:, 0:1, :], axis=1)
             self.pooled_output2 = tf.squeeze(self.sequence_output2[:, 0:1, :], axis=1)
 
+            #  2. mean pooling
             self.mean_pooled_output1 = mean_pooling(self.sequence_output1, input_mask1)
             self.mean_pooled_output2 = mean_pooling(self.sequence_output2, input_mask2)
 
-            with tf.variable_scope("pooler"):
-                # We "pool" the model by simply taking the hidden state corresponding
-                # to the first token. We assume that this has been pre-trained
-                first_token_tensor1 = tf.squeeze(self.sequence_output1[:, 0:1, :], axis=1)
-                self.pooled_output1 = tf.layers.dense(
-                    first_token_tensor1,
-                    config.hidden_size, activation=tf.tanh,
-                    name='pool_out',
-                    kernel_initializer=create_initializer(config.initializer_range))
-            with tf.variable_scope("pooler", reuse=True):
-                # We "pool" the model by simply taking the hidden state corresponding
-                # to the first token. We assume that this has been pre-trained
-                first_token_tensor2 = tf.squeeze(self.sequence_output2[:, 0:1, :], axis=1)
-                self.pooled_output2 = tf.layers.dense(
-                    first_token_tensor2,
-                    config.hidden_size, activation=tf.tanh,
-                    name='pool_out', reuse=True,
-                    kernel_initializer=create_initializer(config.initializer_range))
+            #  3. interaction
+            v1, v2 = self.sequence_output1, self.sequence_output2
+            v1_align, v2_align = interaction(v1, v2, input_mask1, input_mask2)
+
+            v1_combined = submul(v1, v1_align)
+            v2_combined = submul(v2, v2_align)
+
+            self.v1_rep = mean_pooling(v1_combined, input_mask1)
+            self.v2_rep = mean_pooling(v2_combined, input_mask2)
+            # with tf.variable_scope("pooler"):
+            #     # We "pool" the model by simply taking the hidden state corresponding
+            #     # to the first token. We assume that this has been pre-trained
+            #     first_token_tensor1 = tf.squeeze(self.sequence_output1[:, 0:1, :], axis=1)
+            #     self.pooled_output1 = tf.layers.dense(
+            #         first_token_tensor1,
+            #         config.hidden_size, activation=tf.tanh,
+            #         name='pool_out',
+            #         kernel_initializer=create_initializer(config.initializer_range))
+            # with tf.variable_scope("pooler", reuse=True):
+            #     # We "pool" the model by simply taking the hidden state corresponding
+            #     # to the first token. We assume that this has been pre-trained
+            #     first_token_tensor2 = tf.squeeze(self.sequence_output2[:, 0:1, :], axis=1)
+            #     self.pooled_output2 = tf.layers.dense(
+            #         first_token_tensor2,
+            #         config.hidden_size, activation=tf.tanh,
+            #         name='pool_out', reuse=True,
+            #         kernel_initializer=create_initializer(config.initializer_range))
 
     def get_mean_pooled_output1(self):
         '''mean pooling'''
@@ -312,6 +346,14 @@ class BertModel(object):
 
     def get_embedding_table(self):
         return self.embedding_table
+
+    def get_interaction_output1(self):
+        return self.v1_rep
+
+    def get_interaction_output2(self):
+        return self.v2_rep
+
+
 
 
 def gelu(x):

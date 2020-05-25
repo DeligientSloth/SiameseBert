@@ -644,11 +644,16 @@ def create_model(bert_config, is_training,
 
     #  策略1是采用meanpooling的输出
     #  策略2是采用CLS的输出
-    output1 = model.get_mean_pooled_output1()
-    output2 = model.get_mean_pooled_output2()
+    # output1 = model.get_mean_pooled_output1()
+    # output2 = model.get_mean_pooled_output2()
+    # output1 = model.get_pooled_output1()
+    # output2 = model.get_pooled_output2()
+    #
+    # output = tf.concat([tf.multiply(output1, output2), tf.abs(tf.subtract(output1, output2))], axis=-1)
 
-    #  v1, v2 |v1-v2|, v1*v2
-    output = tf.concat([tf.multiply(output1, output2), tf.abs(tf.subtract(output1, output2))], axis=-1)
+    output1 = model.get_interaction_output1()
+    output2 = model.get_interaction_output2()
+    output = tf.concat([output1, output2], axis=-1)
 
     with tf.variable_scope("bert_output_binary_cls"):
         intermediate_output = tf.layers.dense(output, 256, activation=tf.nn.relu)
