@@ -117,8 +117,8 @@ def interaction(v1, v2, mask1, mask2):
     atten_scores12 = tf.matmul(v1, v2, transpose_b=True)  # 行代表input1，列代表input2
     atten_scores21 = tf.transpose(atten_scores12, perm=[0, 2, 1])  # v2 to v1
 
-    fill_mask1 = (1.0 - tf.cast(mask1, tf.float32)) * float('-inf')  # v1 mask的位置是-inf，否则是0
-    fill_mask2 = (1.0 - tf.cast(mask2, tf.float32)) * float('-inf')  # v2 mask的位置是-inf，否则是0
+    fill_mask1 = (1.0 - tf.cast(mask1, tf.float32)) * (-10000.0)  # v1 mask的位置是-inf，否则是0
+    fill_mask2 = (1.0 - tf.cast(mask2, tf.float32)) * (-10000.0)  # v2 mask的位置是-inf，否则是0
 
     atten_scores12 += tf.expand_dims(fill_mask2, axis=1)  # (bs, 1, v2 len)->(bs, v1 len, v2 len)
     atten_scores21 += tf.expand_dims(fill_mask1, axis=1)  # (bs, 1, v1 len)->(bs, v2 len, v1 len)
