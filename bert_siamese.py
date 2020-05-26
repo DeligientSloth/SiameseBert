@@ -466,15 +466,15 @@ def convert_single_sentence(tokens_input, label_id, max_seq_length, tokenizer, e
     assert len(input_mask) == max_seq_length
     assert len(segment_ids) == max_seq_length
 
-    if ex_index < 5:
-        tf.logging.info("*** Example ***")
-        tf.logging.info("*** %s ***" % tag)
-        tf.logging.info("tokens: %s" % " ".join(
-            [tokenization.printable_text(x) for x in tokens]))
-        tf.logging.info("input_ids: %s" % " ".join([str(x) for x in input_ids]))
-        tf.logging.info("input_mask: %s" % " ".join([str(x) for x in input_mask]))
-        tf.logging.info("segment_ids: %s" % " ".join([str(x) for x in segment_ids]))
-        tf.logging.info("label:(id = %d)" % (label_id))
+    # if ex_index < 5:
+    #     tf.logging.info("*** Example ***")
+    #     tf.logging.info("*** %s ***" % tag)
+    #     tf.logging.info("tokens: %s" % " ".join(
+    #         [tokenization.printable_text(x) for x in tokens]))
+    #     tf.logging.info("input_ids: %s" % " ".join([str(x) for x in input_ids]))
+    #     tf.logging.info("input_mask: %s" % " ".join([str(x) for x in input_mask]))
+    #     tf.logging.info("segment_ids: %s" % " ".join([str(x) for x in segment_ids]))
+    #     tf.logging.info("label:(id = %d)" % (label_id))
 
     return input_ids, input_mask, segment_ids
 
@@ -726,13 +726,13 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
             else:
                 tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
 
-        tf.logging.info("**** Trainable Variables ****")
-        for var in tvars:
-          init_string = ""
-          if var.name in initialized_variable_names:
-            init_string = ", *INIT_FROM_CKPT*"
-          tf.logging.info("  name = %s, shape = %s%s", var.name, var.shape,
-                          init_string)
+        # tf.logging.info("**** Trainable Variables ****")
+        # for var in tvars:
+        #   init_string = ""
+        #   if var.name in initialized_variable_names:
+        #     init_string = ", *INIT_FROM_CKPT*"
+        #   tf.logging.info("  name = %s, shape = %s%s", var.name, var.shape,
+        #                   init_string)
 
         output_spec = None
         if mode == tf.estimator.ModeKeys.TRAIN:

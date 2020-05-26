@@ -117,6 +117,8 @@ def interaction(v1, v2, mask1, mask2):
     atten_scores12 = tf.matmul(v1, v2, transpose_b=True)  # 行代表input1，列代表input2
     atten_scores21 = tf.transpose(atten_scores12, perm=[0, 2, 1])  # v2 to v1
 
+    print("attention_shape is ", get_shape_list(atten_scores12))
+
     fill_mask1 = (1.0 - tf.cast(mask1, tf.float32)) * (-10000.0)  # v1 mask的位置是-inf，否则是0
     fill_mask2 = (1.0 - tf.cast(mask2, tf.float32)) * (-10000.0)  # v2 mask的位置是-inf，否则是0
 
@@ -129,12 +131,10 @@ def interaction(v1, v2, mask1, mask2):
     v1_align = tf.matmul(atten_probs12, v2)
     v2_align = tf.matmul(atten_probs21, v1)
 
+    print("align_shape is ", get_shape_list(v1_align))
+
     return v1_align, v2_align
 
-def submul(x1, x2):
-    mul = x1 * x2
-    sub = x1 - x2
-    return tf.concat([mul, sub], axis=-1)
 
 class BertModel(object):
     """
@@ -282,12 +282,14 @@ class BertModel(object):
             self.mean_pooled_output1 = mean_pooling(self.sequence_output1, input_mask1)
             self.mean_pooled_output2 = mean_pooling(self.sequence_output2, input_mask2)
 
-            #  3. interaction
+            # local inference block
             v1, v2 = self.sequence_output1, self.sequence_output2
             v1_align, v2_align = interaction(v1, v2, input_mask1, input_mask2)
 
-            v1_combined = submul(v1, v1_align)
-            v2_combined = submul(v2, v2_align)
+            v1_combined = tf.concat([v1-v1_align, v1*v1_align, v1, v1_align], axis=-1)  # 4*hidden_size
+            v2_combined = tf.concat([v2-v2_align, v2*v2_align, v2, v2_align], axis=-1)  # 4*hidden_size
+
+            print("combined_shape is ", get_shape_list(v1_combined))
 
             self.v1_rep = mean_pooling(v1_combined, input_mask1)
             self.v2_rep = mean_pooling(v2_combined, input_mask2)
