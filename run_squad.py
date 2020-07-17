@@ -23,7 +23,7 @@ import json
 import math
 import os
 import random
-import modeling
+from student_model import modeling
 import optimization
 import tokenization
 import six

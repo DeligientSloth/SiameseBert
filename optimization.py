@@ -70,8 +70,13 @@ def create_optimizer(loss, init_lr, num_train_steps, num_warmup_steps, use_tpu):
   tvars = tf.trainable_variables()
   grads = tf.gradients(loss, tvars)
 
+  grads = [grad if 'bert' in tvar.name else 100 * grad for grad, tvar in zip(grads, tvars)]
+  not_bert_tvars = [tvar.name for grad, tvar in zip(grads, tvars) if 'bert' not in tvar.name]
+
   # This is how the model was pre-trained.
   (grads, _) = tf.clip_by_global_norm(grads, clip_norm=1.0)
+
+  print(not_bert_tvars)
 
   train_op = optimizer.apply_gradients(
       zip(grads, tvars), global_step=global_step)

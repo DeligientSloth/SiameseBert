@@ -27,7 +27,7 @@ import sys
 import codecs
 import io
 
-import siamese_modeling
+import de_modeling
 import optimization
 import tokenization
 
@@ -110,7 +110,7 @@ flags.DEFINE_float(
     "Proportion of training to perform linear learning rate warmup for. "
     "E.g., 0.1 = 10% of training.")
 
-flags.DEFINE_integer("save_checkpoints_steps", 1000,
+flags.DEFINE_integer("save_checkpoints_steps", 10000,
                      "How often to save the model checkpoint.")
 
 flags.DEFINE_integer("iterations_per_loop", 1000,
@@ -142,6 +142,9 @@ flags.DEFINE_integer(
     "num_tpu_cores", 8,
     "Only used if `use_tpu` is True. Total number of TPU cores to use.")
 
+flags.DEFINE_integer(
+    "de_layer_num", 9,
+    "de layer num")
 
 SEED = 12345
 
@@ -450,16 +453,30 @@ class SimiqProcessor(DataProcessor):
         return examples
 
 
-def convert_single_sentence(tokens_input, label_id, max_seq_length, tokenizer, ex_index, tag):
+def convert_single_sentence(tokens_input, label_id, max_seq_length, tokenizer, first=True):
+    '''
+    第一个句子采用 [CLS] + 句子， segment=0
+    第二个句子采用 [SEP] + 句子, segment=1
+
+    原生句对匹配
+    [CLS] + 句子1 + [SEP] (segment=0) + 句子2 + [SEP] (segment=1)
+    '''
     tokens = []
     segment_ids = []
-    tokens.append("[CLS]")
-    segment_ids.append(0)
+    if first==True:
+        tokens.append("[CLS]")
+        segment_ids.append(0)
+    else:
+        tokens.append("[SEP]")
+        segment_ids.append(1)
     for token in tokens_input:
         tokens.append(token)
-        segment_ids.append(0)
-    tokens.append("[SEP]")
-    segment_ids.append(0)
+        if first == True:
+            segment_ids.append(0)
+        else:
+            segment_ids.append(1)
+    # tokens.append("[SEP]")
+    # segment_ids.append(0)
 
     input_ids = tokenizer.convert_tokens_to_ids(tokens)
     input_mask = [1] * len(input_ids)
@@ -517,9 +534,9 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
     label_id = label_map[example.label]
 
     input_ids1, input_mask1, segment_ids1 = convert_single_sentence(tokens_a, label_id, max_seq_length,
-                                                                       tokenizer, ex_index, "tokens_a")
+                                                                       tokenizer, first=True)
     input_ids2, input_mask2, segment_ids2 = convert_single_sentence(tokens_b, label_id, max_seq_length,
-                                                                       tokenizer, ex_index, "tokens_b")
+                                                                       tokenizer, first=False)
 
     feature = InputFeatures(
         input_ids1=input_ids1,
@@ -639,7 +656,7 @@ def create_model(bert_config, is_training,
                  input_ids2, input_mask2, segment_ids2,
                  labels, num_labels, use_one_hot_embeddings):
     """Creates a classification model."""
-    model = siamese_modeling.BertModel(
+    model = de_modeling.BertModel(
         config=bert_config,
         is_training=is_training,
         input_ids1=input_ids1,
@@ -648,23 +665,10 @@ def create_model(bert_config, is_training,
         input_ids2=input_ids2,
         input_mask2=input_mask2,
         token_type_ids2=segment_ids2,
+        de_layer_num=FLAGS.de_layer_num,
         use_one_hot_embeddings=use_one_hot_embeddings)
 
-    #  策略1是采用meanpooling的输出
-    output1 = model.get_mean_pooled_output1()
-    output2 = model.get_mean_pooled_output2()
-
-    output_layer = tf.concat([tf.multiply(output1, output2), tf.abs(tf.subtract(output1, output2))], axis=-1)
-    #  策略2是采用CLS的输出
-    # output1 = model.get_pooled_output1()
-    # output2 = model.get_pooled_output2()
-
-
-    #  策略3是采用两个句子之间进行interaction
-    # output1 = model.get_interaction_output1()
-    # output2 = model.get_interaction_output2()
-    # output = tf.concat([output1, output2], axis=-1)
-
+    output_layer = model.get_pooled_output()
     hidden_size = output_layer.shape[-1].value
 
     output_weights = tf.get_variable(
@@ -736,7 +740,7 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
         scaffold_fn = None
         if init_checkpoint:
             (assignment_map, initialized_variable_names
-             ) = siamese_modeling.get_assignment_map_from_checkpoint(tvars, init_checkpoint)
+             ) = de_modeling.get_assignment_map_from_checkpoint(tvars, init_checkpoint)
             if use_tpu:
 
                 def tpu_scaffold():
@@ -747,13 +751,15 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
             else:
                 tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
 
-        # tf.logging.info("**** Trainable Variables ****")
-        # for var in tvars:
-        #   init_string = ""
-        #   if var.name in initialized_variable_names:
-        #     init_string = ", *INIT_FROM_CKPT*"
-        #   tf.logging.info("  name = %s, shape = %s%s", var.name, var.shape,
-        #                   init_string)
+        tf.logging.info("**** Trainable Variables ****")
+        for var in tvars:
+          init_string = ""
+          if var.name in initialized_variable_names:
+            init_string = ", *INIT_FROM_CKPT*"
+          if var.name not in initialized_variable_names:
+              tf.logging.info("没有初始化参数, name = %s", var.name)
+          # tf.logging.info("  name = %s, shape = %s%s", var.name, var.shape,
+          #                 init_string)
 
         output_spec = None
         if mode == tf.estimator.ModeKeys.TRAIN:
@@ -908,7 +914,7 @@ def main(_):
         raise ValueError(
             "At least one of `do_train`, `do_eval` or `do_predict' must be True.")
 
-    bert_config = siamese_modeling.BertConfig.from_json_file(FLAGS.bert_config_file)
+    bert_config = de_modeling.BertConfig.from_json_file(FLAGS.bert_config_file)
 
     if FLAGS.max_seq_length > bert_config.max_position_embeddings:
         raise ValueError(
@@ -986,7 +992,7 @@ def main(_):
     if FLAGS.do_train:
         shutil.rmtree(FLAGS.output_dir)  # 将整个文件夹删除
         os.makedirs(FLAGS.output_dir)  # 重新创建文件夹
-        train_file = os.path.join(FLAGS.data_dir, "train_siamese.tf_record")
+        train_file = os.path.join(FLAGS.data_dir, "train_siamese_de.tf_record")
         if not os.path.exists(train_file):
             file_based_convert_examples_to_features(
                 train_examples, label_list, FLAGS.max_seq_length, tokenizer, train_file)
@@ -1001,10 +1007,11 @@ def main(_):
             drop_remainder=True)
 
         eval_examples = processor.get_dev_examples(FLAGS.data_dir)
-        eval_file = os.path.join(FLAGS.data_dir, "eval_siamese.tf_record")
+        eval_file = os.path.join(FLAGS.data_dir, "eval_siamese_de.tf_record")
         if not os.path.exists(eval_file):
             file_based_convert_examples_to_features(
                 eval_examples, label_list, FLAGS.max_seq_length, tokenizer, eval_file)
+
         tf.logging.info("***** Running evaluation *****")
         tf.logging.info("  Num examples = %d", len(eval_examples))
         tf.logging.info("  Batch size = %d", FLAGS.eval_batch_size)
@@ -1054,7 +1061,7 @@ def main(_):
 
     if FLAGS.do_predict:
         predict_examples = processor.get_test_examples(FLAGS.data_dir)
-        predict_file = os.path.join(FLAGS.data_dir, "predict_siamese.tf_record")
+        predict_file = os.path.join(FLAGS.data_dir, "predict_siamese_de.tf_record")
         if not os.path.exists(predict_file):
             file_based_convert_examples_to_features(predict_examples, label_list,
                                                     FLAGS.max_seq_length, tokenizer,
@@ -1094,8 +1101,6 @@ def main(_):
         with open(FLAGS.data_dir + "/test.txt", encoding="utf-8") as f:
             for line in f:
                 q1, q2, l = line.strip().split("\t")
-                # if l == '2':
-                #     l = '1'
                 q1s.append(q1)
                 q2s.append(q2)
                 labels.append(l)

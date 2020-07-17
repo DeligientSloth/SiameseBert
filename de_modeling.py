@@ -103,37 +103,6 @@ class BertConfig(object):
         """Serializes this instance to a JSON string."""
         return json.dumps(self.to_dict(), indent=2, sort_keys=True) + "\n"
 
-def mean_pooling(inp, inp_mask):
-    '''mean pooling with mask'''
-    #  给mask升维度，broadcast机制会进行处理
-    mul_mask = lambda x, m: x * tf.cast((tf.expand_dims(m, axis=-1)), dtype=tf.float32)
-    #  平均，mask分子只需要计算是1的部分
-    masked_reduce_mean = lambda x, m: tf.reduce_sum(mul_mask(x, m), axis=1) / (
-            tf.cast(tf.reduce_sum(m, axis=1, keepdims=True), dtype=tf.float32) + tf.constant(1e-10)) # tf.Variable(1e-10, tf.float32)
-    return masked_reduce_mean(inp, inp_mask)
-
-def interaction(v1, v2, mask1, mask2):
-
-    atten_scores12 = tf.matmul(v1, v2, transpose_b=True)  # 行代表input1，列代表input2
-    atten_scores21 = tf.transpose(atten_scores12, perm=[0, 2, 1])  # v2 to v1
-
-    print("attention_shape is ", get_shape_list(atten_scores12))
-
-    fill_mask1 = (1.0 - tf.cast(mask1, tf.float32)) * (-10000.0)  # v1 mask的位置是-inf，否则是0
-    fill_mask2 = (1.0 - tf.cast(mask2, tf.float32)) * (-10000.0)  # v2 mask的位置是-inf，否则是0
-
-    atten_scores12 += tf.expand_dims(fill_mask2, axis=1)  # (bs, 1, v2 len)->(bs, v1 len, v2 len)
-    atten_scores21 += tf.expand_dims(fill_mask1, axis=1)  # (bs, 1, v1 len)->(bs, v2 len, v1 len)
-
-    atten_probs12 = tf.nn.softmax(atten_scores12)
-    atten_probs21 = tf.nn.softmax(atten_scores21)
-
-    v1_align = tf.matmul(atten_probs12, v2)
-    v2_align = tf.matmul(atten_probs21, v1)
-
-    print("align_shape is ", get_shape_list(v1_align))
-
-    return v1_align, v2_align
 
 
 class BertModel(object):
@@ -149,10 +118,12 @@ class BertModel(object):
                  input_mask2=None,
                  token_type_ids1=None,
                  token_type_ids2=None,
+                 de_layer_num=9,
                  use_one_hot_embeddings=False,
                  scope=None):
         """
         传入两个句子的token_ids和seg_ids以及mask
+        de_layer_num是双塔结构Siamese的层数
         """
         config = copy.deepcopy(config)
         if not is_training:
@@ -223,24 +194,20 @@ class BertModel(object):
                     max_position_embeddings=config.max_position_embeddings,
                     dropout_prob=config.hidden_dropout_prob)
 
-            assert self.embedding_table1==self.embedding_table2
+            assert self.embedding_table1 == self.embedding_table2
             self.embedding_table = self.embedding_table1
 
-            #  encoder of sentence1, variable scope encoder
+            # Siamese-Bert part
             with tf.variable_scope("encoder"):
-                # This converts a 2D mask of shape [batch_size, seq_length] to a 3D
-                # mask of shape [batch_size, seq_length, seq_length] which is used
-                # for the attention scores.
                 attention_mask1 = create_attention_mask_from_input_mask(
                     input_ids1, input_mask1)
 
-                # Run the stacked transformer.
-                # `sequence_output` shape = [batch_size, seq_length, hidden_size].
                 self.all_encoder_layers1 = transformer_model(
                     input_tensor=self.embedding_output1,
                     attention_mask=attention_mask1,
                     hidden_size=config.hidden_size,
-                    num_hidden_layers=config.num_hidden_layers,
+                    start_layer=0,
+                    end_layer=de_layer_num,
                     num_attention_heads=config.num_attention_heads,
                     intermediate_size=config.intermediate_size,
                     intermediate_act_fn=get_activation(config.hidden_act),
@@ -251,9 +218,6 @@ class BertModel(object):
 
             #  encoder of sentence2, reuse variable scope encoder
             with tf.variable_scope("encoder", reuse=True):
-                # This converts a 2D mask of shape [batch_size, seq_length] to a 3D
-                # mask of shape [batch_size, seq_length, seq_length] which is used
-                # for the attention scores.
                 attention_mask2 = create_attention_mask_from_input_mask(
                     input_ids2, input_mask2)
                 # Run the stacked transformer.
@@ -262,7 +226,8 @@ class BertModel(object):
                     input_tensor=self.embedding_output2,
                     attention_mask=attention_mask2,
                     hidden_size=config.hidden_size,
-                    num_hidden_layers=config.num_hidden_layers,
+                    start_layer=0,
+                    end_layer=de_layer_num,
                     num_attention_heads=config.num_attention_heads,
                     intermediate_size=config.intermediate_size,
                     intermediate_act_fn=get_activation(config.hidden_act),
@@ -271,107 +236,36 @@ class BertModel(object):
                     initializer_range=config.initializer_range,
                     do_return_all_layers=True)
 
-            self.sequence_output1 = self.all_encoder_layers1[-1]
-            self.sequence_output2 = self.all_encoder_layers2[-1]
+            #  siamese bert的结果
+            self.siamese_output1 = self.all_encoder_layers1[-1]
+            self.siamese_output2 = self.all_encoder_layers2[-1]
 
-            #  1. mean pooling
-            self.mean_pooled_output1 = mean_pooling(self.sequence_output1, input_mask1)
-            self.mean_pooled_output2 = mean_pooling(self.sequence_output2, input_mask2)
+            # 合并sentence encoding以及mask
+            self.sentence_output = tf.concat([self.siamese_output1, self.siamese_output2], axis=1)
+            input_mask = tf.concat([input_mask1, input_mask2], axis=1)
+            attention_mask = create_attention_mask_from_input_mask(
+                self.sentence_output, input_mask)
 
-            #  2. CLS
-            with tf.variable_scope("pooler"):
-                # We "pool" the model by simply taking the hidden state corresponding
-                # to the first token. We assume that this has been pre-trained
-                first_token_tensor1 = tf.squeeze(self.sequence_output1[:, 0:1, :], axis=1)
-                # self.pooled_output = first_token_tensor
-                self.pooled_output1 = tf.layers.dense(
-                    first_token_tensor1,
-                    config.hidden_size,
-                    activation=tf.tanh,
-                    kernel_initializer=create_initializer(config.initializer_range))
-            with tf.variable_scope("pooler", reuse=True):
-                # We "pool" the model by simply taking the hidden state corresponding
-                # to the first token. We assume that this has been pre-trained
-                first_token_tensor2 = tf.squeeze(self.sequence_output2[:, 0:1, :], axis=1)
-                # self.pooled_output = first_token_tensor
-                self.pooled_output2 = tf.layers.dense(
-                    first_token_tensor2,
-                    config.hidden_size,
-                    activation=tf.tanh,
-                    kernel_initializer=create_initializer(config.initializer_range))
+            # interaction part
+            with tf.variable_scope("encoder", reuse=tf.AUTO_REUSE):
+                self.sequence_output = transformer_model(
+                    input_tensor=self.sentence_output,
+                    attention_mask=attention_mask,
+                    hidden_size=config.hidden_size,
+                    start_layer=de_layer_num,
+                    end_layer=config.num_hidden_layers,
+                    num_attention_heads=config.num_attention_heads,
+                    intermediate_size=config.intermediate_size,
+                    intermediate_act_fn=get_activation(config.hidden_act),
+                    hidden_dropout_prob=config.hidden_dropout_prob,
+                    attention_probs_dropout_prob=config.attention_probs_dropout_prob,
+                    initializer_range=config.initializer_range)
 
-            # # local inference block
-            # v1, v2 = self.sequence_output1, self.sequence_output2
-            # v1_align, v2_align = interaction(v1, v2, input_mask1, input_mask2)
-            #
-            # v1_combined = tf.concat([v1-v1_align, v1*v1_align, v1, v1_align], axis=-1)  # 4*hidden_size
-            # v2_combined = tf.concat([v2-v2_align, v2*v2_align, v2, v2_align], axis=-1)  # 4*hidden_size
-            #
-            # print("combined_shape is ", get_shape_list(v1_combined))
-            #
-            # self.v1_rep = mean_pooling(v1_combined, input_mask1)
-            # self.v2_rep = mean_pooling(v2_combined, input_mask2)
-            # with tf.variable_scope("pooler"):
-            #     # We "pool" the model by simply taking the hidden state corresponding
-            #     # to the first token. We assume that this has been pre-trained
-            #     first_token_tensor1 = tf.squeeze(self.sequence_output1[:, 0:1, :], axis=1)
-            #     self.pooled_output1 = tf.layers.dense(
-            #         first_token_tensor1,
-            #         config.hidden_size, activation=tf.tanh,
-            #         name='pool_out',
-            #         kernel_initializer=create_initializer(config.initializer_range))
-            # with tf.variable_scope("pooler", reuse=True):
-            #     # We "pool" the model by simply taking the hidden state corresponding
-            #     # to the first token. We assume that this has been pre-trained
-            #     first_token_tensor2 = tf.squeeze(self.sequence_output2[:, 0:1, :], axis=1)
-            #     self.pooled_output2 = tf.layers.dense(
-            #         first_token_tensor2,
-            #         config.hidden_size, activation=tf.tanh,
-            #         name='pool_out', reuse=True,
-            #         kernel_initializer=create_initializer(config.initializer_range))
+            self.pooled_output = tf.squeeze(self.sequence_output[:, 0:1, :], axis=1)
 
-    def get_mean_pooled_output1(self):
-        '''mean pooling'''
-        return self.mean_pooled_output1
-
-    def get_mean_pooled_output2(self):
-        '''mean pooling'''
-        return self.mean_pooled_output2
-
-    def get_pooled_output1(self):
+    def get_pooled_output(self):
         '''cls'''
-        return self.pooled_output1
-
-    def get_pooled_output2(self):
-        '''cls'''
-        return self.pooled_output2
-
-    def get_sequence_output1(self):
-        return self.sequence_output1
-
-    def get_sequence_output2(self):
-        return self.sequence_output2
-
-    def get_all_encoder_layers1(self):
-        return self.all_encoder_layers1
-
-    def get_all_encoder_layers2(self):
-        return self.all_encoder_layers2
-
-    def get_embedding_output1(self):
-        return self.embedding_output1
-
-    def get_embedding_output2(self):
-        return self.embedding_output2
-
-    def get_embedding_table(self):
-        return self.embedding_table
-
-    def get_interaction_output1(self):
-        return self.v1_rep
-
-    def get_interaction_output2(self):
-        return self.v2_rep
+        return self.pooled_output
 
 
 
@@ -670,6 +564,7 @@ def create_attention_mask_from_input_mask(from_tensor, to_mask):
     return mask
 
 
+
 def attention_layer(from_tensor,
                     to_tensor,
                     attention_mask=None,
@@ -873,7 +768,8 @@ def attention_layer(from_tensor,
 def transformer_model(input_tensor,
                       attention_mask=None,
                       hidden_size=768,
-                      num_hidden_layers=12,
+                      start_layer=1,
+                      end_layer=12,
                       num_attention_heads=12,
                       intermediate_size=3072,
                       intermediate_act_fn=gelu,
@@ -881,43 +777,7 @@ def transformer_model(input_tensor,
                       attention_probs_dropout_prob=0.1,
                       initializer_range=0.02,
                       do_return_all_layers=False):
-    """Multi-headed, multi-layer Transformer from "Attention is All You Need".
 
-    This is almost an exact implementation of the original Transformer encoder.
-
-    See the original paper:
-    https://arxiv.org/abs/1706.03762
-
-    Also see:
-    https://github.com/tensorflow/tensor2tensor/blob/master/tensor2tensor/models/transformer.py
-
-    Args:
-      input_tensor: float Tensor of shape [batch_size, seq_length, hidden_size].
-      attention_mask: (optional) int32 Tensor of shape [batch_size, seq_length,
-        seq_length], with 1 for positions that can be attended to and 0 in
-        positions that should not be.
-      hidden_size: int. Hidden size of the Transformer.
-      num_hidden_layers: int. Number of layers (blocks) in the Transformer.
-      num_attention_heads: int. Number of attention heads in the Transformer.
-      intermediate_size: int. The size of the "intermediate" (a.k.a., feed
-        forward) layer.
-      intermediate_act_fn: function. The non-linear activation function to apply
-        to the output of the intermediate/feed-forward layer.
-      hidden_dropout_prob: float. Dropout probability for the hidden layers.
-      attention_probs_dropout_prob: float. Dropout probability of the attention
-        probabilities.
-      initializer_range: float. Range of the initializer (stddev of truncated
-        normal).
-      do_return_all_layers: Whether to also return all layers or just the final
-        layer.
-
-    Returns:
-      float Tensor of shape [batch_size, seq_length, hidden_size], the final
-      hidden layer of the Transformer.
-
-    Raises:
-      ValueError: A Tensor shape or parameter is invalid.
-    """
     if hidden_size % num_attention_heads != 0:
         raise ValueError(
             "The hidden size (%d) is not a multiple of the number of attention "
@@ -942,7 +802,8 @@ def transformer_model(input_tensor,
     prev_output = reshape_to_matrix(input_tensor)
 
     all_layer_outputs = []
-    for layer_idx in range(num_hidden_layers):
+
+    for layer_idx in range(start_layer, end_layer):
         with tf.variable_scope("layer_%d" % layer_idx):
             layer_input = prev_output
             '''
